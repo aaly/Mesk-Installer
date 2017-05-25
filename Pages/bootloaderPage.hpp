@@ -7,12 +7,13 @@
 #ifndef BOOTLOADERPAGE_HPP
 #define BOOTLOADERPAGE_HPP
 
-#include <QWidget>
-#include <MPF/pageBase.hpp>
+#include <QtWidgets/QWidget>
+//#include <MPF/pageBase.hpp>
 #include "ui_bootloaderPage.h"
 #include <MPF/System/drive.hpp>
 #include <Pages/diskPage.hpp>
 #include <MPF/System/chroot.hpp>
+
 
 class bootEntry
 {
@@ -28,6 +29,7 @@ public:
 	QString rootUUID;
 	QString rootDevPath;
 	bool  sub;
+	//QVector<bootEntry> subEntries;
 private:
 
 };
@@ -46,7 +48,7 @@ public:
     
 private:
     void changeEvent(QEvent* event);
-    chroot croot;
+    CHRoot croot;
     QFile bootMenuFile;
     diskPage* dpage;
     QList<Drive> drives;
@@ -68,6 +70,10 @@ private:
 
 	int generateFsTab();
 
+    int initMenu();
+
+    QString rootdev;
+
 
 private slots:
 
@@ -84,6 +90,8 @@ private slots:
     int modifyBootEntry(int, int);
 
     int addToBootMenu();
+
+	int changeOptions();
 
 public slots:
     int     finishUp();

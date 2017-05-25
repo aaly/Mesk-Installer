@@ -7,6 +7,16 @@
 #ifndef INSTALLATIONPAGE_HPP
 #define INSTALLATIONPAGE_HPP
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/sendfile.h>
+#include <errno.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <sys/param.h>
+
 #include <MPF/Pages/pageBase.hpp>
 #include "ui_installationPage.h"
 #include <MPF/System/chroot.hpp>
@@ -20,8 +30,13 @@
 #include <QTimer>
 #include <QPixmap>
 
-#include <QMessageBox>
-#include <QtConcurrentRun>
+#include <QtWidgets/QMessageBox>
+#include <QtConcurrent/QtConcurrentRun>
+
+
+
+
+
 
 
 class installationPage : public pageBase, private Ui::installationPage
@@ -36,6 +51,8 @@ public:
 private:
 
 
+	int OSCopyFile(const char* source, const char* destination);
+	int cp(const char *to, const char *from);
     int generateKernel();
     int generateLocales();
 	int setTimeZone();
@@ -52,8 +69,8 @@ private:
     QTimer* timer;
 
     QString installationRoot;
-    chroot*      Root;
-    QProcess        filesCopier;
+    CHRoot*      Root;
+    //QProcess        filesCopier;
 
     void changeEvent(QEvent* event);
 

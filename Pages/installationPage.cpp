@@ -10,9 +10,20 @@ installationPage::installationPage(QWidget *parent) :
 pageBase(parent)
 {
     Ui_installationPage::setupUi(this);
-    slidesDir = getApplicationFile("/slides/"+lang);
+
+	slidesDir = getApplicationFile("/slides/"+lang);
+
+	if(QFile::exists(getApplicationFile("/slides/"+lang)))
+	{
+		slidesDir = getApplicationFile("/slides/"+lang);
+	}
+	else
+	{
+		slidesDir =  getApplicationFile("/slides/en");
+	}
+
     installationRoot = "/mnt/root/";
-    Root = new chroot(this);
+    Root = new CHRoot(this);
     Root->setRoot(installationRoot);
 
 
@@ -30,8 +41,9 @@ installationPage::~installationPage()
 
 int installationPage::initAll()
 {
+
     pageBase::initAll();
-    emit Status(tr("Loading slides"), BUSY);
+	setStatus(tr("Loading slides"), BUSY);
     initSlideShow();
     emit Ready();
     preparePackagesList();
@@ -42,6 +54,7 @@ int installationPage::initAll()
         return 0;
     }*/
 
+	cerr << "done init all " << endl << flush;
     return 0;
 }
 
@@ -77,9 +90,12 @@ int installationPage::slide()
 
 int installationPage::install()
 {
+	cerr << "begin install " << endl << flush;
+	setStatus(tr("Installing packages ..."), BUSY);
     // mount the root partition
     diskPage* dpage = (diskPage*)getDependency("Disk");
-    QProcess mountRoot;
+
+    /*QProcess mountRoot;
 
     mountRoot.execute("mkdir -p " + installationRoot);
     mountRoot.waitForFinished();
@@ -92,11 +108,11 @@ int installationPage::install()
     // TODO: only if it is already mounted ???
     mountRoot.start("umount " + dpage->rootPartition);
     mountRoot.waitForFinished(20000);
-    /*
-    if (mountRoot.readAllStandardError().size() > 0)
-    {
-        setStatus("Couldn't un mount the installation partition : " + dpage->rootPartition , ERROR);
-    }*/
+
+    //if (mountRoot.readAllStandardError().size() > 0)
+    //{
+    //    setStatus("Couldn't un mount the installation partition : " + dpage->rootPartition , ERROR);
+    //}
 
     mountRoot.start("mount " + dpage->rootPartition + " " + installationRoot);
     mountRoot.waitForFinished(10000);
@@ -105,7 +121,7 @@ int installationPage::install()
     {
         setStatus("Couldn't mount the installation partition : " + dpage->rootPartition , ERROR);
         return 1;
-    }
+    }*/
 
 
     connect(&futureWatcher2, SIGNAL(finished()), this, SLOT(finishInstallation()));
@@ -123,7 +139,6 @@ int installationPage::installSystem()
     QMetaObject::invokeMethod( installationProgressBar, "setValue", Qt::QueuedConnection,
                                Q_ARG( int, 80 ) );
 
-    Root->prepare();
     generateKernel();
     //installationProgressBar->setValue(90);
     QMetaObject::invokeMethod( installationProgressBar, "setValue", Qt::QueuedConnection,
@@ -152,6 +167,10 @@ int installationPage::installSystem()
 
     Root->unprepare();
 
+    /*QProcess mountRoot;
+    mountRoot.start("umount " + installationRoot);
+    mountRoot.waitForFinished(10000);*/
+
     return 0;
 }
 
@@ -163,7 +182,7 @@ int installationPage::finishInstallation()
         return 1;
     }
 
-    QProcess mountRoot;
+    /*QProcess mountRoot;
     diskPage* dpage = (diskPage*)getDependency("Disk");
 
     mountRoot.start("umount " + dpage->rootPartition);
@@ -173,11 +192,11 @@ int installationPage::finishInstallation()
     {
         setStatus("Couldn't un mount the installation partition : " + dpage->rootPartition, ERROR);
         //return 1;
-    }
+    }*/
 
     emit installationStatus(tr("Done installing"));
 
-    emit Done(true);
+	setDone(true);
     timer->stop();
 
     return 0;
@@ -199,73 +218,225 @@ int installationPage::preparePackagesList()
     return 0;
 }
 
+
+
+int installationPage::cp(const char *to, const char *from)
+{
+    int fd_to, fd_from;
+    char buf[4096];
+    ssize_t nread;
+    int saved_errno;
+
+    fd_from = open(from, O_RDONLY);
+    if (fd_from < 0)
+        return -1;
+
+    fd_to = open(to, O_WRONLY | O_CREAT | O_EXCL, 0666);
+    if (fd_to < 0)
+        goto out_error;
+
+    while (nread = read(fd_from, buf, sizeof buf), nread > 0)
+    {
+        char *out_ptr = buf;
+        ssize_t nwritten;
+
+        do {
+            nwritten = write(fd_to, out_ptr, nread);
+
+            if (nwritten >= 0)
+            {
+                nread -= nwritten;
+                out_ptr += nwritten;
+            }
+            else if (errno != EINTR)
+            {
+                goto out_error;
+            }
+        } while (nread > 0);
+    }
+
+    if (nread == 0)
+    {
+        if (::close(fd_to) < 0)
+        {
+            fd_to = -1;
+            goto out_error;
+        }
+        ::close(fd_from);
+
+        /* Success! */
+        return 0;
+    }
+
+  out_error:
+    saved_errno = errno;
+
+    ::close(fd_from);
+    if (fd_to >= 0)
+        ::close(fd_to);
+
+    errno = saved_errno;
+    return -1;
+}
+
+int installationPage::OSCopyFile(const char* source, const char* destination)
+{    
+    int input, output;    
+    if ((input = open(source, O_RDONLY)) == -1)
+    {
+		cerr << "ERROR COPYNG FILE 1" << destination << endl << flush;
+        return -1;
+    }    
+    if ((output = open(destination, O_WRONLY | O_CREAT | O_EXCL)) == -1)
+    {
+		cerr << "ERROR COPYNG FILE 2 : " << destination << endl << flush;
+        ::close(input);
+        return -1;
+    }
+
+    //Here we use kernel-space copying for performance reasons
+    //sendfile will work with non-socket output (i.e. regular file) on Linux 2.6.33+
+    off_t bytesCopied = 0;
+    struct stat fileinfo = {};
+    fstat(input, &fileinfo);
+    int result = sendfile(output, input, &bytesCopied, fileinfo.st_size);
+    
+    ::close(input);
+    ::close(output);
+    
+    chown(destination, fileinfo.st_uid, fileinfo.st_gid);
+
+    return result;
+}
+
 int installationPage::installPackages()
 {
     QVector<meskPackage>    packages = future.result();
+    QVector<QString>    packagesScripts;
 
     cout << "pakcages size : " << packages.size() << endl;
     //QEventLoop* eventLoop = new QEventLoop(this->parent());
+    
+    QDir dirMaker;
 
-    for (int i=0; i < packages.count(); i++)
+    for (int i=0, pcount = packages.count(); i < pcount; i++)
     {
-        //if(packages.at(i).Name != "pacman")
-        {
-            //continue;
-        }
-        cout << "Installing: " << packages.at(i).Name.toStdString() << endl;
-
         emit installationStatus(tr("installing package: ")+packages.at(i).Name+"\n"+tr("size: ")+packages.at(i).strSize +
                   "\n (" + QString::number(i+1) + "/" + QString::number(packages.size()) + ")");
-        //cout << packages.at(i).Name.toStdString() << " " << i << " " << packages.count() << flush;
-        for ( int k=0; k < packages.at(i).packageFiles.count(); k++)
+
+        for ( int k=0, count=packages.at(i).packageFiles.count(); k < count; k++)
         {
-
-
-            QString file = packages.at(i).packageFiles.at(k);
-            file = file.mid(0, file.size()-2);
-
-            QFileInfo finfo(file);
-
-            //if (packages.at(i).packageFiles.at(k).toStdString().at(packages.at(i).packageFiles.at(k).toStdString().size()-2)== '/' )
-            if(finfo.isDir())
+            QString file = packages.at(i).packageFiles.at(k).trimmed();
+            //if (file.at(file.size()-1) == '/' )
+            
+            struct stat st = {};
+            
+            if (lstat(file.toStdString().c_str(), &st) == -1)
             {
-                //cout << "DIR : " << packages.at(i).packageFiles.at(k).toStdString() << flush << endl;
-                if (QFile::exists(installationRoot+file) == false)
-                {
-                    filesCopier.execute("mkdir " + installationRoot +packages.at(i).packageFiles.at(k) );
-                    //TODO: place them outside so that we make sure it is a recover if this is over installation
-                    filesCopier.execute("chmod --reference=" + packages.at(i).packageFiles.at(k) + " " + installationRoot +packages.at(i).packageFiles.at(k) );
-                    filesCopier.execute("chown --reference=" + packages.at(i).packageFiles.at(k) + " " + installationRoot +packages.at(i).packageFiles.at(k) );
-                }
+				cerr << "PATH NOT FOUND :" << file.toStdString() << endl << flush;
+			}
+			
+			if(S_ISLNK(st.st_mode)) //link
+            {
+				if (file == "/bin")
+				{
+					//cerr << "IT IS LINK :" << file.toStdString() << endl << flush;
+				}
+				//read the original link
+				char resolvedPath[MAXPATHLEN];
+				//char buf[1024];
+				//if (readlink(file.toStdString().c_str(), buf, sizeof(buf)-1) == -1)
+				if (realpath(file.toStdString().c_str(), resolvedPath) == NULL)
+				{
+					//cerr << "ERROR READING LINK :" << file.toStdString() << endl << flush;
+					continue;
+				}
+				//create the new link
+				if(symlink (resolvedPath, (installationRoot + file).toStdString().c_str()) != 0)
+				{
+					//cerr << "ERROR CREATING LINK :" << (installationRoot + file).toStdString() << endl << flush;
+					continue;
+				}
+				// get all chown stuff
+			}
+			else if(S_ISDIR(st.st_mode)) //dir 
+			{
+				if (file == "/bin")
+				{
+					//cerr << "IT IS DIR :" << file.toStdString() << endl << flush;
+				}
+				
+                QString filepath = installationRoot+file;
+                //cout << "DIR : " << file.toStdString() << flush << endl;
+                st={};
+				if (stat(filepath.toStdString().c_str(), &st) == -1)
+				{
+					stat(file.toStdString().c_str(), &st);
+					//chmod(filepath.toStdString().c_str(), st.st_mode);
+					if (mkdir(filepath.toStdString().c_str(), st.st_mode) != 0)
+					{
+						//cerr << "ERROR CREATING DIR :" << filepath.toStdString() << endl << flush;
+					}
+					chown(filepath.toStdString().c_str(), st.st_uid, st.st_gid);
+				}
 
-                continue;
+                /*if (dirMaker.exists(filepath) == false)
+                {
+                    //filesCopier.execute("mkdir " + filepath );
+                    dirMaker.mkpath(filepath);
+                    struct stat st;
+					stat(file.toStdString().c_str(), &st);
+					chmod(filepath.toStdString().c_str(), st.st_mode);
+					chown(filepath.toStdString().c_str(), st.st_uid, st.st_gid);
+                }*/
+                
+                //TODO: place them outside so that we make sure it is a recover if this is over installation
+                //filesCopier.execute("chmod --reference=" + file + " " + filepath );
+                //filesCopier.execute("chown --reference=" + file + " " + filepath );
+                ////////filesCopier.waitForFinished();
             }
             else
             {
-                filesCopier.execute("cp -af " + packages.at(i).packageFiles.at(k) + " " + installationRoot + packages.at(i).packageFiles.at(k).mid(0, packages.at(i).packageFiles.at(k).lastIndexOf('/')) );
-                filesCopier.waitForFinished();
-                if(filesCopier.readAllStandardError().size() > 0)
+                //filesCopier.execute("cp -af " + file + " " + installationRoot + file.mid(0, file.lastIndexOf('/')) );
+                //filesCopier.execute("cp --preserve=all " + file + " " + installationRoot + file.mid(0, file.lastIndexOf('/')) );
+                
+                //if (OSCopyFile(file.toStdString().c_str(), (installationRoot + file.mid(1, file.size())).toStdString().c_str()) == -1)
+                if (cp((installationRoot + file).toStdString().c_str(), file.toStdString().c_str()) == -1)
                 {
-                    setStatus(tr("Couldn't copy file : ") + packages.at(i).packageFiles.at(k) + tr(" to : ") + installationRoot, ERROR);
-                    return 1;
-                }
+					//cerr << "ERROR COPYNG FILE :" << (installationRoot + file).toStdString() << endl << flush;
+					continue;
+				}
+                //struct stat st;
+                st={};
+				stat(file.toStdString().c_str(), &st);
+				chmod((installationRoot + file).toStdString().c_str(), st.st_mode);
+				chown((installationRoot + file).toStdString().c_str(), st.st_uid, st.st_gid);
             }
         }
+        
+        /*if(filesCopier.readAllStandardError().size() > 0)
+		{
+			setStatus(tr("Couldn't install package : ") + packages.at(i).Name,ERROR);
+			//setStatus(tr("Couldn't copy file : ") + file + tr(" to : ") + installationRoot, ERROR);
+			return 1;
+		}*/
 
+		
+		QMetaObject::invokeMethod( installationProgressBar, "setValue", Qt::QueuedConnection,
+                                  Q_ARG( int, (i+1)*80/pcount ) );
         //installationProgressBar->setValue((i*80)/packages.at(i).packageFiles.count());
-
-
-        QMetaObject::invokeMethod( installationProgressBar, "setValue", Qt::QueuedConnection,
-                                   Q_ARG( int, (i+1)*80/packages.count() ) );
-
+        
         //connect(this, SIGNAL(signal()), _receiver, slot);
         //emit signal();
         //disconnect(this, SIGNAL(signal()), _receiver, slot);
 
         //eventLoop->processEvents();
     }
-
-
+    
+    
+    return 0;
+    
+    QProcess        filesCopier;
 
     emit installationStatus(tr("updating original packages files"));
     QFile overlayFiles;
@@ -326,7 +497,18 @@ int installationPage::installPackages()
         }
     }
 
-    filesCopier.execute("cp -af /var/lib/pacman/sync/ " + installationRoot + "/var/lib/pacman/sync/" );
+    emit installationStatus(tr("configuring local packages"));
+
+    filesCopier.execute("/usr/bin/mkdir " + installationRoot + "/install/" );
+    filesCopier.waitForFinished();
+
+    filesCopier.execute("/usr/bin/cp /install/localpkgs.setup " + installationRoot + "/install/" );
+    filesCopier.execute("/usr/bin/chmod +x " + installationRoot + "/install/localpkgs.setup" );
+    filesCopier.waitForFinished();    
+    Root->exec("/usr/bin/bash /install/localpkgs.setup");
+    
+
+    filesCopier.execute("/usr/bin/cp -af /var/lib/pacman/sync/ " + installationRoot + "/var/lib/pacman/sync/" );
     filesCopier.waitForFinished();
     if(filesCopier.readAllStandardError().size() > 0)
     {
@@ -346,22 +528,38 @@ int installationPage::generateKernel()
 {
     //generate kernel images and stuff
     emit installationStatus(tr("generating kernel initramfs"));
-    QDir bootDir(installationRoot+"/boot/");
-    QStringList filters;
-    filters << "vmlinuz*";
-    bootDir.setNameFilters(filters);
+    
+    Root->prepare();
+    Root->exec("/sbin/depmod");
+
+    //chroot  /usr/bin/mkinitcpio -p linux
+    //QDir bootDir(installationRoot+"/boot/");    
+    QDir bootDir(installationRoot+"/usr/lib/modules/");
+    //QStringList filters;
+    //filters << "vmlinuz*";
+    //bootDir.setNameFilters(filters);
 
     for ( int i =0; i < bootDir.entryList().size(); i++)
     {
-        if(bootDir.entryList().at(i).right(3) == "img")
+		if( (bootDir.entryList().at(i) == ".") || (bootDir.entryList().at(i) == ".." ) )
+		{
+			continue;
+		}
+
+        if(bootDir.entryList().at(i).contains("extramodules"))
         {
             continue;
         }
-
-
-        Root->exec("mkinitcpio -k /boot/" + bootDir.entryList().at(i) + " -g /boot/" + bootDir.entryList().at(i)  + ".img ");
+        
+        if(bootDir.entryList().at(i).contains("ARCH"))
+        {
+			Root->exec("/usr/bin/mkinitcpio -k " + bootDir.entryList().at(i) + " -g /boot/initramfs-linux.img ", 600000);
+		}
+		else
+		{
+			Root->exec("/usr/bin/mkinitcpio -k " + bootDir.entryList().at(i) + " -g /boot/initramfs-" + bootDir.entryList()[i].remove(QRegExp("*-")) + ".img ", 600000);
+		}
     }
-
     //FIX loop through all kernels in /usr/modules/ , and do depmod -b /lib/modules/version
     return 0;
 }
@@ -374,7 +572,8 @@ int installationPage::generateLocales()
     timePage* tpage = (timePage*)getDependency("Time");
     QString locales = tpage->getLocales();
     QFile localesfile;
-    filesCopier.execute(installationRoot+"mv /etc/locale.gen " + installationRoot + "/etc/locale.gen.install");
+    QProcess        filesCopier;
+    filesCopier.execute("/usr/bin/mv " + installationRoot +"/etc/locale.gen " + installationRoot + "/etc/locale.gen.install");
     filesCopier.waitForFinished();
 
     localesfile.setFileName(installationRoot+"/etc/locale.gen");
@@ -383,17 +582,27 @@ int installationPage::generateLocales()
     localesfile.flush();
     localesfile.close();
 
-    return Root->exec("locale-gen");
+    return Root->exec("/usr/bin/locale-gen");
 }
 
 int installationPage::setTimeZone()
 {
 	emit installationStatus(tr("setting system timezone"));
+	
+	QProcess        filesCopier;
 
 	timePage* tpage = (timePage*)getDependency("Time");
 	//ln -sf /usr/share/zoneinfo/your/zone /etc/localtime
-	filesCopier.execute("ln -sf /usr/share/zoneinfo/" + tpage->getTimeZone() + " " + installationRoot + "/etc/localtime");
+	filesCopier.execute("/usr/bin/ln -sf /usr/share/zoneinfo/" + tpage->getTimeZone() + " " + installationRoot + "/etc/localtime");
 	filesCopier.waitForFinished();
+
+    Root->exec("/usr/bin/timedatectl set-timezone "+ tpage->getTimeZone());
+
+    if(tpage->isLocalTime())
+    {
+        Root->exec("/usr/bin/timedatectl set-local-rtc true");
+    }
+
 	return 0;
 }
 
@@ -429,13 +638,18 @@ int installationPage::copyPostPackages()
 {
 	emit installationStatus(tr("copying post install packages"));
 
-	filesCopier.execute("mkdir " + installationRoot+"/install/");
-	filesCopier.waitForFinished();
-
-    filesCopier.execute("cp -r /install/postpackagesrepo/ " + installationRoot+"/install/");
+	QProcess        filesCopier;
+	
+    filesCopier.execute("/usr/bin/cp -rf /install/overlay/. " + installationRoot);
     filesCopier.waitForFinished(9900000);
 
-    filesCopier.execute("cp -r /install/postpackages/ " + installationRoot+"/install/");
+	filesCopier.execute("/usr/bin/mkdir " + installationRoot+"/install/");
+	filesCopier.waitForFinished();
+
+    filesCopier.execute("/usr/bin/cp -r /install/postpackagesrepo/ " + installationRoot+"/install/");
+    filesCopier.waitForFinished(9900000);
+
+    filesCopier.execute("/usr/bin/cp -r /install/postpackages/ " + installationRoot+"/install/");
     filesCopier.waitForFinished();
 
 	QFile configStatusFile(installationRoot+"/install/config");
@@ -469,9 +683,9 @@ int installationPage::copyPostPackages()
 
 	inittabFile.close();
     inittabFile.open(QIODevice::Truncate|QIODevice::WriteOnly);
-	inittabFile.write(inittabLines.toAscii());
+    inittabFile.write(inittabLines.toLatin1());
 	inittabFile.close();
     //depmod
-    Root->exec("fc-cache");
+    Root->exec("/usr/bin/fc-cache");
 	return 0;
 }

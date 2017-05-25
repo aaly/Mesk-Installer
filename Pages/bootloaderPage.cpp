@@ -7,9 +7,11 @@
 #include "bootloaderPage.hpp"
 #include <MPF/Delegates/richTextDelegate.hpp>
 #include <QDir>
+#include <QtConcurrent/QtConcurrentRun>
 
-bootloaderPage::bootloaderPage(QWidget *parent) :
-    pageBase(parent){
+
+bootloaderPage::bootloaderPage(QWidget *parent) : pageBase(parent)
+{
 
 	Ui_bootloaderPage::setupUi(this);
 
@@ -21,38 +23,45 @@ bootloaderPage::bootloaderPage(QWidget *parent) :
     connect(addBootEntryPushButton, SIGNAL(clicked()), this, SLOT(addBootEntry()));
     connect(removeBootEntryPushButton, SIGNAL(clicked()), this, SLOT(removeBootEntry()));
 
+	connect(OSTypeComboBox, SIGNAL(textChanged(const QString &)), this, SLOT(changeOptions()));
+
 
     //bootMenuTableWidget->setItemDelegate(new richTextDelegate(this));
     bootMenuTableWidget->setItemDelegateForColumn(2, new richTextDelegate(this));
     bootMenuTableWidget->setItemDelegateForColumn(3, new richTextDelegate(this));
     bootMenuTableWidget->setItemDelegateForColumn(4, new richTextDelegate(this));
     bootMenuTableWidget->setItemDelegateForColumn(5, new richTextDelegate(this));
+    setEnabled(false);
 
+    QFile file("/install/rootdev");
+    file.open(QIODevice::ReadOnly);
+    QTextStream rootstream(&file);
+    rootdev = rootstream.readLine();
 }
 
 bootloaderPage::~bootloaderPage()
 {
     croot.unprepare();
-	mountRoot.start("umount /mnt/root");
-    mountRoot.waitForFinished();
+    ////mountRoot.start("umount" + rootPath);
+    ////mountRoot.waitForFinished();
 }
 
 
 int bootloaderPage::initAll()
 {
     pageBase::initAll();
+
     dpage = (diskPage*)getDependency("Disk");
     drives =  dpage->getDisks();
 
 
-    cout << "Disk Page 1" << endl << flush;
     for (int i =0, l =0; i < drives.size(); i++)
     {
-		setupComboBox->addItem(drives[i].getdevPath().remove("/dev/"));
+        setupComboBox->addItem(drives[i].getdevPath().remove("/dev/"));
 
         for (int k =0; k < drives[i].getExtendedPartitions().size(); k++)
         {
-			rootComboBox->addItem(drives[i].getExtendedPartitions()[k].getdevPath().remove("/dev/"));
+            rootComboBox->addItem(drives[i].getExtendedPartitions()[k].getdevPath().remove("/dev/"));
             bootEntryRootComboBox->addItem(drives[i].getExtendedPartitions()[k].getdevPath().remove("/dev/"));
             if(drives[i].getExtendedPartitions()[k].getdevPath() == dpage->rootPartition)
             {
@@ -62,44 +71,52 @@ int bootloaderPage::initAll()
             l++;
         }
     }
-    cout << "Disk Page 2" << endl << flush;
     bootEntryRootComboBox->setEditable(true);
 
-	mountRoot.start("mount " + dpage->rootPartition + " /mnt/root");
-    mountRoot.waitForFinished();
+   //// mountRoot.start("mount " + dpage->rootPartition + " /mnt/root");
+   //// mountRoot.waitForFinished();
 
     rootPath = "/mnt/root/";
     croot.setRoot(rootPath);
     croot.prepare();
 
-cout << "Disk Page 3" << endl << flush;
 
-	for (int i =0; i < dpage->getInstallationMountPoints().size(); i++)
-	{
-		if(dpage->getInstallationMountPoints().at(i).path == "/boot")
-		{
-			bootPartition = dpage->getInstallationMountPoints().at(i).partition;
-		}
-	}
+    for (int i =0; i < dpage->getInstallationMountPoints().size(); i++)
+    {
+        if(dpage->getInstallationMountPoints().at(i).path == "/boot")
+        {
+            bootPartition = dpage->getInstallationMountPoints().at(i).partition;
+        }
+    }
 
-    cout << "Disk Page 4" << endl << flush;
-	if(bootPartition.size() > 0)
-	{
-		setupComboBox->setCurrentIndex(setupComboBox->findText(bootPartition.remove("/dev/").mid(0, 3)));
-		rootComboBox->setCurrentIndex(rootComboBox->findText(bootPartition.remove("/dev/")));
-	}
+    if(bootPartition.size() > 0)
+    {
+        setupComboBox->setCurrentIndex(setupComboBox->findText(bootPartition.remove("/dev/").mid(0, 3)));
+        rootComboBox->setCurrentIndex(rootComboBox->findText(bootPartition.remove("/dev/")));
+    }
 
-    cout << "Disk Page 5" << endl << flush;
-    generateBootMenu();
+    OSTypeComboBox->addItem("Linux");
+    OSTypeComboBox->addItem("Windows");
+    OSTypeComboBox->setCurrentIndex(0);
 
-    emit Done(true);
+    QtConcurrent::run(this, &bootloaderPage::initMenu);
+
     return 0;
 }
 
+int bootloaderPage::initMenu()
+{
 
+    setStatus(tr("Loading the boot menu"), STATUS);
+    cout << "Generating boot menu" << endl;
+    generateBootMenu();
+    setDone(true);
+    setEnabled(true);
+}
 
 int bootloaderPage::checkBootloaderPasswordStrength()
 {
+
 	QString icon;
 	if(bootPasswordLineEdit->text().size() < 6)
 	{
@@ -140,10 +157,11 @@ int bootloaderPage::confirmBootloaderPassword()
 
 int bootloaderPage::generateBootMenu()
 {
-    croot.exec("grub-mkconfig -o /boot/grub/grub.cfg");
+    croot.exec("/usr/bin/grub-mkconfig -o /boot/grub/grub.cfg", 600000);
 
     //FIXME: what if the boot is another partition ? need to get it from disk page
     bootMenuFile.setFileName("/mnt/root/boot/grub/grub.cfg");
+    //bootMenuFile.setFileName("/menu.lst");
     if (!bootMenuFile.open(QIODevice::ReadOnly))
     {
         setStatus(tr("Couldn't open /mnt/root/boot/grub/grub.cfg to generate boot menu view"), ERROR);
@@ -155,15 +173,25 @@ int bootloaderPage::generateBootMenu()
     //QString entry;
     bool entry = false;
 	bool submenu = false;
+	QString submenuTitle;
     bootEntry bt;
+	bt.sub = false;
     while ( !bootFileStream.atEnd() )
     {
         line = bootFileStream.readLine();
-        //entry = "";
 
-        if( line.mid(0, 9) == "menuentry")
+		if( line.contains(QRegExp("^[ \\t]*submenu ")))
+		{
+			cerr << "IF 1 "  << endl << flush;
+			submenu = true;
+			submenuTitle = bt.title = line.mid(line.indexOf("'")+1, line.indexOf("'", line.indexOf("'")+1)-line.indexOf("'")-1);
+			continue;
+		}
+		else if( line.contains(QRegExp("^[ \\t]*menuentry ")))
         {
-            bt.title = line.mid(line.indexOf("'")+1, line.indexOf("'", line.indexOf("'")+1)-line.indexOf("'")-1);
+			cerr << "IF 2 "  << endl << flush;
+            //bt.title = line.mid(line.indexOf("'")+1, line.indexOf("'", line.indexOf("'")+1)-line.indexOf("'")-1);
+            bt.title = line.mid(line.indexOf(QRegExp("['\"]"))+1, line.indexOf(QRegExp("['\"]"), line.indexOf(QRegExp("['\"]"))+1)-line.indexOf(QRegExp("['\"]"))-1);
             //bt.os = line.mid(line.indexOf("--class")+8,line.indexOf(' ', line.indexOf("--class"))-line.indexOf("--class") );
             if(line.contains("linux"))
             {
@@ -173,44 +201,78 @@ int bootloaderPage::generateBootMenu()
             {
                 bt.os = "windows";
             }
-            cout << "OS : " << bt.os.toStdString() << endl;
+            else if(line.contains("osx"))
+            {
+                bt.os = "osx";
+            }
+
+			if(submenu)
+			{
+				bt.title = submenuTitle + " -> " + bt.title;
+			}
             entry = true;
+            ////cout << "ENTRYYYYY" << bt.title.toStdString() << endl << flush;
+
             continue;
         }
-		else if(line == "submenu")
-		{
-			submenu = true;
-			continue;
-		}
+
 
         if(entry)
         {
-			if( line.contains(QRegExp("^( |\t)+linux")))
-				//if( line.contains(QRegExp("\s*linux")))
+			cerr << "IF 3 "  << endl << flush;
+			//cout << line.toStdString() << ";;;;" << flush << endl;
+			//if( line.at(0) == '#' )
+			//{
+			//	continue;
+			//}
+			if( line.contains(QRegExp("^( |\t)*linux")))
 			{
-				bt.kernel = line.split(QRegExp(("( |\t)"))).at(2);
+				cerr << "IF 4 "  << endl << flush;	
+				for (int i =0; i < line.split(QRegExp(("( |\t)"))).count(); i++)
+				{
+					if(line.split(QRegExp(("( |\t)"))).at(i).contains("/"))
+					{
+						bt.kernel = line.split(QRegExp(("( |\t)"))).at(i);
+						break;
+					}
+				}
+
 				bt.kernelOptions = line.remove(bt.kernel).remove("linux");
 				continue;
 			}
-			else if( line.contains(QRegExp("^( |\t)+initrd")))
+			else if( line.contains(QRegExp("^( |\t)*initrd")) )
 			{
-				bt.initramfs = line.split(QRegExp(("( |\t)"))).at(2);
+				cerr << "IF 5 "  << endl << flush;
+				for (int i =0; i < line.split(QRegExp(("( |\t)"))).count(); i++)
+				{
+					if(line.split(QRegExp(("( |\t)"))).at(i).contains("/"))
+					{
+						bt.initramfs = line.split(QRegExp(("( |\t)"))).at(i);
+					}
+				}
 				continue;
 			}
-			else if( line.contains("root=")) //set root='hd0,msdos1'
+			else if( line.contains("set root=") ) //set root='hd0,msdos1'
 			{
+				cerr << "IF 6 "  << endl << flush;
 				QString root = line.mid(line.indexOf("'")+1, line.lastIndexOf("'")-line.indexOf("'")-1);
 				QString drive = root.split(",").at(0);
 				drive.remove("hd");
+				cerr << "IF 6 "  << endl << flush;
 
 				QString partition = root.split(",").at(1);
-				partition.remove(QRegExp("msdos"));
+				cerr << "IF 6 "  << endl << flush;
+                //partition.remove(QRegExp("msdos"));
+                //partition.remove(QRegExp("[a-zA-Z]*"));
+                partition.remove(QRegExp("\\D*"));
 
 				bt.rootpartition.first = drive.toInt();
 				bt.rootpartition.second = partition.toInt();
 				bt.root = dpage->getDisks()[drive.toInt()].getFullPartitions().at(partition.toInt()-1).getdevPath().remove("/dev/");
 				bt.rootUUID=dpage->getDisks()[drive.toInt()].getFullPartitions().at(partition.toInt()-1).getUUID();
 				bt.rootDevPath = dpage->getDisks()[drive.toInt()].getFullPartitions().at(partition.toInt()-1).getdevPath();
+				
+				cerr << "DONE IF 6 "  << endl << flush;
 				/*for(int i =0; i < dpage->getDisks()[drive.toInt()].getExtendedPartitions().size(); i++)
 					{
 						if ( (dpage->getDisks().at(drive.toInt()).getPartitions().at(i)).getPartitions().size() + (i+1) >= partition.toInt() )
@@ -231,12 +293,15 @@ int bootloaderPage::generateBootMenu()
 			{
 				continue;
 			}
-			//else if( line.contains(QRegExp("( |\t)*}")) )
-			else if( line == "}" )
+			else if( line.contains("}"))
 			{
 				bt.sub = submenu;
-				bootMenu.push_back(bt);
-				addToBootMenu();
+                if(bt.root.mid(0, bt.root.size()-1) != rootdev.remove("/dev/"))
+                {
+                    bootMenu.push_back(bt);
+                    addToBootMenu();
+                }
+
 				entry = false;
 				bt = bootEntry();
 			}
@@ -250,6 +315,7 @@ int bootloaderPage::generateBootMenu()
 			if(submenu && line == "}")
 			{
 				submenu = false;
+				submenuTitle = "";
 			}
 			else
 			{
@@ -261,6 +327,8 @@ int bootloaderPage::generateBootMenu()
 
     bootMenuFile.close();
 	connect(bootMenuTableWidget, SIGNAL(cellChanged(int,int)), this, SLOT(modifyBootEntry(int, int)));
+	
+	cerr << "DONE ALLLLLL "  << endl << flush;
 
 	return 0;
 
@@ -341,31 +409,50 @@ int bootloaderPage::removeBootEntry()
 int bootloaderPage::addBootEntry()
 {
     //TODO: check if it is already there ?
-    bootEntry bt;
-    bt.title = bootEntryTitlelineEdit->text();
-    bt.root = bootEntryRootComboBox->currentText();
-    bt.kernel = bootEntryKernellineEdit->text();
-	bt.kernelOptions = bootEntryKernelOptionslineEdit->text();
-    bt.initramfs = bootEntryInitramfsLineEdit->text();
-    bt.options = bootEntryOptionsLineEdit->text();
+	bootEntry bootentry;
+	bootentry.title = bootEntryTitlelineEdit->text();
+	bootentry.root = bootEntryRootComboBox->currentText();
+	bootentry.kernel = bootEntryKernellineEdit->text();
+	bootentry.kernelOptions = bootEntryKernelOptionslineEdit->text();
+	bootentry.initramfs = bootEntryInitramfsLineEdit->text();
+	bootentry.options = bootEntryOptionsLineEdit->text();
+	bootentry.os = OSTypeComboBox->currentText();
 
-	bt.rootDevPath = "/dev/"+bt.root ;
+    if(bootentry.os == "Windows")
+    {
+        bootentry.os = "windows";
+    }
+    else if(bootentry.os == "Linux")
+    {
+        bootentry.os = "linux";
+    }
+
+	if(bootentry.title.contains("->"))
+	{
+		bootentry.sub = true;
+	}
+	else
+	{
+		bootentry.sub = false;
+	}
+
+	bootentry.rootDevPath = "/dev/"+bootentry.root ;
 
 	for (int i =0; i < dpage->getDisks().size(); i++)
 	{
 		for (int k=0; k < dpage->getDisks().at(i).getPartitions().size(); k++)
 		{
-			if(bt.rootDevPath == dpage->getDisks().at(i).getPartitions().at(k).getdevPath())
+			if(bootentry.rootDevPath == dpage->getDisks().at(i).getPartitions().at(k).getdevPath())
 			{
-				bt.rootUUID = dpage->getDisks().at(i).getPartitions().at(k).getUUID();
+				bootentry.rootUUID = dpage->getDisks().at(i).getPartitions().at(k).getUUID();
 				//FIXME: we used to get it from hd?,msdos? , but is this the right order?
-				bt.rootpartition.first = i ;
-				bt.rootpartition.second = k+1 ;
+				bootentry.rootpartition.first = i ;
+				bootentry.rootpartition.second = k+1 ;
 			}
 		}
 	}
 
-    if( !bt.title.size() > 0)
+	if( !bootentry.title.size() > 0)
     {
         bootEntryTitleLabel->setText("<div style=\" color:red;\" >" + tr("Title") + " </div>");
         return 0;
@@ -375,7 +462,7 @@ int bootloaderPage::addBootEntry()
         bootEntryTitleLabel->setText( tr("Title"));
     }
 
-    if( !bt.root.size() > 0)
+	if( !bootentry.root.size() > 0)
     {
         bootEntryRootLabel->setText("<div style=\" color:red;\" >" + tr("Root") + " </div>");
         return 0;
@@ -385,15 +472,18 @@ int bootloaderPage::addBootEntry()
         bootEntryRootLabel->setText( tr("Root"));
     }
 
-    bootMenu.push_back(bt);
+
 
     bootEntryInitramfsLineEdit->setText("");
     bootEntryKernellineEdit->setText("");
 	bootEntryKernelOptionslineEdit->setText("");
     bootEntryOptionsLineEdit->setText("");
     bootEntryRootComboBox->setCurrentIndex(0);
+	OSTypeComboBox->setCurrentIndex(0);
     bootEntryTitlelineEdit->setText("");
 
+
+	bootMenu.push_back(bootentry);
     addToBootMenu();
 
     return 0;
@@ -402,28 +492,48 @@ int bootloaderPage::addBootEntry()
 int bootloaderPage::addToBootMenu()
 {
 	bootEntry bt = (const bootEntry)bootMenu.at(bootMenu.size()-1);
+	int nextRow = bootMenuTableWidget->rowCount();
+	bootMenuTableWidget->insertRow(nextRow);
+	bootMenuTableWidget->setItem(nextRow, 0, new QTableWidgetItem(bt.title));
 
-int nextRow = bootMenuTableWidget->rowCount();
 
-bootMenuTableWidget->insertRow(nextRow);
-bootMenuTableWidget->setItem(nextRow, 0, new QTableWidgetItem(bt.title));
+    ////cout << "boot titleee: " << bootMenu.at(bootMenu.size()-1).title.toStdString() << endl;
 
-if(bt.sub)
-{
-	(bootMenuTableWidget->itemAt(nextRow, 0))->setIcon(QIcon(getApplicationFile("/Icons/submenu.png")));
-}
-bootMenuTableWidget->setItem(nextRow, 1, new QTableWidgetItem(bt.root));
+	if(bt.sub)
+	{
+		bootMenuTableWidget->item(nextRow, 0)->setIcon(QIcon(getApplicationFile("/Icons/submenu.png")));
+	}
 
-bool kernelEditable = true;
-bool kernelOptionsEditable = true;
-bool initramfsEditable = true;
-bool optionsEditable = true;
 
-if(bt.kernel.size() == 0)
-{
-	bt.kernel = "<img align=absmiddle height=20 width=20 src=" + getApplicationFile("/Icons/windows.png") + ">";
-    kernelEditable= false;
-}
+	bootMenuTableWidget->setItem(nextRow, 1, new QTableWidgetItem(bt.root));
+
+	bool kernelEditable = true;
+	bool kernelOptionsEditable = true;
+	bool initramfsEditable = true;
+	bool optionsEditable = true;
+
+
+
+	if(bt.os != "linux")
+	{
+        if(bt.kernel.size() == 0)
+        {
+            bt.kernel = "<img align=absmiddle height=20 width=20 src=" + getApplicationFile("/Icons/" + bt.os + ".png") + ">";
+            kernelEditable= false;
+        }
+
+        if(bt.kernelOptions.size() == 0)
+        {
+            bt.kernelOptions = "<img align=absmiddle height=20 width=20 src=" + getApplicationFile("/Icons/" + bt.os + ".png") + ">";
+            kernelOptionsEditable = false;
+        }
+
+        if(bt.initramfs.size() == 0)
+        {
+            bt.initramfs = "<img align=absmiddle height=20 width=20 src=" + getApplicationFile("/Icons/" + bt.os + ".png") + ">";
+            initramfsEditable= false;
+        }
+	}
 /*
 //bootMenuTableWidget->setItem(nextRow, 2, new QTableWidgetItem(kernel).setIcon(););
 QIcon icon(getApplicationFile("/Icons/windows.png"));
@@ -434,53 +544,56 @@ kernelitem->setTextAlignment(Qt::AlignHCenter);
 bootMenuTableWidget->setItem(nextRow, 2, kernelitem);
 */
 
-QTableWidgetItem* kernelItem = new QTableWidgetItem(bt.kernel);
-if(!kernelEditable)
-{
-    kernelItem->setFlags(kernelItem->flags() & (Qt::ItemFlag)~Qt::ItemIsEditable);
-}
-bootMenuTableWidget->setItem(nextRow, 2, kernelItem);
+    ////cout << "boot title: " << bootMenu.at(bootMenu.size()-1).title.toStdString() << endl;
 
 
-if(bt.kernelOptions.size() == 0)
-{
-	bt.kernelOptions = "<img align=absmiddle height=20 width=20 src=" + getApplicationFile("/Icons/windows.png") + ">";
-    kernelOptionsEditable = false;
-}
-
-QTableWidgetItem* kernelOptionsItem = new QTableWidgetItem(bt.kernelOptions);
-if(!kernelOptionsEditable)
-{
-    kernelOptionsItem->setFlags(kernelOptionsItem->flags() & (Qt::ItemFlag)~Qt::ItemIsEditable);
-}
-bootMenuTableWidget->setItem(nextRow, 3, kernelOptionsItem);
+	QTableWidgetItem* kernelItem = new QTableWidgetItem(bt.kernel);
+	if(!kernelEditable)
+	{
+		kernelItem->setFlags(kernelItem->flags() & (Qt::ItemFlag)~Qt::ItemIsEditable);
+	}
+	bootMenuTableWidget->setItem(nextRow, 2, kernelItem);
 
 
-if(bt.initramfs.size() == 0)
-{
-	bt.initramfs = "<img align=absmiddle height=20 width=20 src=" + getApplicationFile("/Icons/windows.png") + ">";
-    initramfsEditable= false;
-}
+    /*if(bt.kernelOptions.size() == 0)
+	{
+		bt.kernelOptions = "<img align=absmiddle height=20 width=20 src=" + getApplicationFile("/Icons/windows.png") + ">";
+		kernelOptionsEditable = false;
+    }*/
 
-QTableWidgetItem* initramfslItem = new QTableWidgetItem(bt.initramfs);
-if(!initramfsEditable)
-{
-    initramfslItem->setFlags(initramfslItem->flags() & (Qt::ItemFlag)~Qt::ItemIsEditable);
-}
-bootMenuTableWidget->setItem(nextRow, 4, initramfslItem);
+	QTableWidgetItem* kernelOptionsItem = new QTableWidgetItem(bt.kernelOptions);
+	if(!kernelOptionsEditable)
+	{
+		kernelOptionsItem->setFlags(kernelOptionsItem->flags() & (Qt::ItemFlag)~Qt::ItemIsEditable);
+	}
+	bootMenuTableWidget->setItem(nextRow, 3, kernelOptionsItem);
 
-if(bt.options.size() == 0)
-{
-	bt.options = "<img align=absmiddle height=20 width=20 src=" + getApplicationFile("/Icons/windows.png") + ">";
-    optionsEditable = false;
-}
 
-QTableWidgetItem* optionsItem = new QTableWidgetItem(bt.options);
-if(!optionsEditable)
-{
-    optionsItem->setFlags(optionsItem->flags() & (Qt::ItemFlag)~Qt::ItemIsEditable);
-}
-bootMenuTableWidget->setItem(nextRow, 5, optionsItem);
+    /*if(bt.initramfs.size() == 0)
+	{
+		bt.initramfs = "<img align=absmiddle height=20 width=20 src=" + getApplicationFile("/Icons/windows.png") + ">";
+		initramfsEditable= false;
+    }*/
+
+	QTableWidgetItem* initramfslItem = new QTableWidgetItem(bt.initramfs);
+	if(!initramfsEditable)
+	{
+		initramfslItem->setFlags(initramfslItem->flags() & (Qt::ItemFlag)~Qt::ItemIsEditable);
+	}
+	bootMenuTableWidget->setItem(nextRow, 4, initramfslItem);
+
+    /*if(bt.options.size() == 0)
+	{
+		bt.options = "<img align=absmiddle height=20 width=20 src=" + getApplicationFile("/Icons/windows.png") + ">";
+		optionsEditable = false;
+    }*/
+
+	QTableWidgetItem* optionsItem = new QTableWidgetItem(bt.options);
+	if(!optionsEditable)
+	{
+		optionsItem->setFlags(optionsItem->flags() & (Qt::ItemFlag)~Qt::ItemIsEditable);
+	}
+	bootMenuTableWidget->setItem(nextRow, 5, optionsItem);
 
 /*
 QColor bgcolor(Qt::blue);
@@ -523,32 +636,51 @@ else if (bt.os == "osx")
 (bootMenuTableWidget->itemAt(0, 5))->setIcon(icon);
 */
 
-bootMenuTableWidget->resizeColumnsToContents();
+	bootMenuTableWidget->resizeColumnsToContents();
 
+    ////cout << "boot title: " << bootMenu.at(bootMenu.size()-1).title.toStdString() << endl;
 
-return 0;
+	return 0;
 }
 
 int bootloaderPage::writeBootMenu()
 {
+    mountRoot.start("mkdir -p " + rootPath + "/boot/grub/");
+    mountRoot.waitForFinished();
+
 	mountRoot.start("rm " + rootPath + "/boot/grub/grub.cfg");
     mountRoot.waitForFinished();
 
-    QFile grubCfg(rootPath + "/boot/grub/grub.cfg");
+    mountRoot.start("cp  /boot/splash.png " + rootPath + "/boot/");
+    mountRoot.waitForFinished();
+
+	QFile grubCfg(rootPath + "/boot/grub/grub.cfg");
+	//QFile grubCfg("/grub.cfg");
 
     if (!grubCfg.open(QIODevice::WriteOnly))
     {
         setStatus(tr("Error opening the grub config file for writing"), ERROR);
         return 1;
     }
-    QTextStream grubCfgStream(&grubCfg);
+	QTextStream grubCfgStream(&grubCfg);
+
+    grubCfgStream << "insmod png" << endl;
+    grubCfgStream << "insmod vbe" << endl;
+    grubCfgStream << "insmod gfxterm" << endl;
+    //set gfxmode=1024x768
+    //set gfxpayload=keep
+    grubCfgStream << "terminal_output gfxterm" << endl;
+    grubCfgStream << "background_image /boot/splash.png" << endl;
+    grubCfgStream << "set color_normal=white/black" << endl;
+    grubCfgStream << "set color_highlight=yellow/black" << endl;
+
     grubCfgStream << cfgOptions << endl;
 
-    for(int i =0; i < bootMenu.size(); i++)
+
+	for(int i =0; i < bootMenu.count(); i++)
     {
-    cout << "TITLE  :" << bootMenu.at(i).title.toStdString();
         // title
-        grubCfgStream << "menuentry '" << bootMenu.at(i).title << "' --class " << bootMenu.at(i).os << " {" << endl;
+		grubCfgStream << "menuentry '" << bootMenu.at(i).title << "' --class " << bootMenu.at(i).os << " {" << endl;
         // entry options
 		if(UUIDBootCheckBox->isChecked())
 		{
@@ -568,17 +700,27 @@ int bootloaderPage::writeBootMenu()
         if(bootMenu.at(i).os == "linux")
         {
 			// kernel
-			grubCfgStream << "echo '" + tr("Loading Kernel") + "'" << endl;
-			grubCfgStream << "linux " << bootMenu.at(i).kernel << " " << bootMenu.at(i).kernelOptions << endl;
+			if(bootMenu.at(i).kernel.size() > 0)
+			{
+				grubCfgStream << "echo '" + tr("Loading Kernel") + "'" << endl;
+				grubCfgStream << "linux " << bootMenu.at(i).kernel << " " << bootMenu.at(i).kernelOptions << endl;
+			}
 			// initramfs
-			grubCfgStream << "echo '" + tr("Loading initial ramdisk") + "'" << endl;
-			grubCfgStream << "initrd " << bootMenu.at(i).initramfs << endl;
+			if(bootMenu.at(i).initramfs.size() > 0)
+			{
+				grubCfgStream << "echo '" + tr("Loading initial ramdisk") + "'" << endl;
+				grubCfgStream << "initrd " << bootMenu.at(i).initramfs << endl;
+			}
+		}
+		else if(bootMenu.at(i).os == "windows")
+		{
+			grubCfgStream << "drivemap -s (hd" << bootMenu.at(i).rootpartition.first << ") ${root}" << endl;
+			grubCfgStream << "chainloader +1" << endl;
 		}
         grubCfgStream << "}" <<  endl;
-        grubCfgStream.flush();
-        grubCfg.flush();
+		//grubCfgStream.flush();
+		//grubCfg.flush();
     }
-
     return 0;
 }
 
@@ -606,38 +748,42 @@ int bootloaderPage::finishUp()
     //if boot partition , mount it and copy /boot/* to it
 
 
-	setStatus(tr("Generating fstab"), INFORMATION);
-	generateFsTab();
-    return 0;
+    if(fstabCheckBox->isChecked())
+    {
+        setStatus(tr("Generating fstab"), INFORMATION);
+        generateFsTab();
+    }
+    croot.unprepare();
+	return 0;
 }
 
 int bootloaderPage::modifyBootEntry(int row, int col)
 {
     if(col == 0) // title
     {
-        bootMenu[row].title = bootMenuTableWidget->itemAt(row, col)->text();
+		bootMenu[row].title = bootMenuTableWidget->item(row, col)->text();
     }
     else if(col == 1) // root
     {
-        bootMenu[row].root = bootMenuTableWidget->itemAt(row, col)->text();
+		bootMenu[row].root = bootMenuTableWidget->item(row, col)->text();
         //bootMenu[row].rootpartition.first = bootMenuTableWidget->itemAt(row, col)->text();
         //bootMenu[row].rootpartition.second = bootMenuTableWidget->itemAt(row, col)->text();
     }
     else if(col == 2) // kernel
     {
-        bootMenu[row].kernel = bootMenuTableWidget->itemAt(row, col)->text();
+		bootMenu[row].kernel = bootMenuTableWidget->item(row, col)->text();
     }
     else if(col == 3) // kernel opts
     {
-        bootMenu[row].kernelOptions = bootMenuTableWidget->itemAt(row, col)->text();
+		bootMenu[row].kernelOptions = bootMenuTableWidget->item(row, col)->text();
     }
     else if(col == 4) // initramfs
     {
-        bootMenu[row].initramfs = bootMenuTableWidget->itemAt(row, col)->text();
+		bootMenu[row].initramfs = bootMenuTableWidget->item(row, col)->text();
     }
     else if(col == 5) // options
     {
-        bootMenu[row].options = bootMenuTableWidget->itemAt(row, col)->text();
+		bootMenu[row].options = bootMenuTableWidget->item(row, col)->text();
     }
     return 0;
 }
@@ -646,12 +792,16 @@ int bootloaderPage::modifyBootEntry(int row, int col)
 
 int bootloaderPage::generateFsTab()
 {
-	QFile fstabfile(rootPath+"/etc/fstab");
-	if (!fstabfile.open(QIODevice::Append))
+    //mountRoot.start("mv " + rootPath + "/etc/fstab " + rootPath + "/etc/fstab-old.mesk");
+    mountRoot.start("rm " + rootPath + "/etc/fstab");
+    mountRoot.waitForFinished();
+
+    QFile fstabfile(rootPath+"/etc/fstab");
+    if (!fstabfile.open(QIODevice::Append))
 	{
 		setStatus(tr("Couldn't open the installation fstab file !"), ERROR);
 		return 1;
-	}
+    }
 	QTextStream fstabfilestream(&fstabfile);
 
 // loop for all devices, if removeable, skip ( add removable bool to drives
@@ -760,7 +910,28 @@ int bootloaderPage::generateFsTab()
 			 fstabfilestream.flush();
 		}
 	}
-	cout << "DONEEEEEEEEEE" << endl << flush;
+    fstabfilestream << "\n";
+    fstabfile.close();
+
 	return 0;
 }
 
+int bootloaderPage::changeOptions()
+{
+	if(OSTypeComboBox->currentText() == "Windows")
+	{
+		bootEntryOptionsLineEdit->setText(bootEntryOptionsLineEdit->text() + "chainloader +1\n");
+		bootEntryKernellineEdit->setEnabled(false);
+		bootEntryKernelOptionslineEdit->setEnabled(false);
+		bootEntryInitramfsLineEdit->setEnabled(false);
+	}
+	else
+	{
+		bootEntryOptionsLineEdit->setText(bootEntryOptionsLineEdit->text().remove("chainloader +1"));
+		bootEntryKernellineEdit->setEnabled(true);
+		bootEntryKernelOptionslineEdit->setEnabled(true);
+		bootEntryInitramfsLineEdit->setEnabled(true);
+	}
+
+	return 0;
+}

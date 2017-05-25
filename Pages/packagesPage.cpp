@@ -1,13 +1,13 @@
 /******************************************************
-* copyright 2011, 2012, 2013 AbdAllah Aly Saad , aaly90[@]gmail.com
+* copyright 2011-2017 AbdAllah Aly Saad , aaly90[@]gmail.com
 * Part of Mesklinux Installer
 * See LICENSE file for more info
 ******************************************************/
 
 #include "packagesPage.hpp"
-#include <QMessageBox>
+#include <QtWidgets/QMessageBox>
 #include <QFuture>
-#include <QtConcurrentRun>
+#include <QtConcurrent/QtConcurrentRun>
 
 map<QString, QVector<QString> > pkgDeps;
 QVector<QString> criticSubDeps;
@@ -17,12 +17,15 @@ QVector<meskPackage> selectedPackages;
 
 meskPackage::meskPackage()
 {
-    Name = "";
+    //Name = "";
     //Repo = "ERROR";
+    Name = "ERROR";
     Size = 0;
     Description = "";
     Critical = false;
     Remove = false;
+    //dependenciesCounter = 0;
+    dependsCounter = 0;
 
 }
 
@@ -51,16 +54,35 @@ packagesPage::packagesPage(QWidget *parent) :
 
     connect(resetPushButton, SIGNAL(clicked()), this, SLOT(resetLists()));
     connect(packagesListWidget, SIGNAL(currentRowChanged(int)), this, SLOT(updatePackageDescription(int)));
-    //connect(packagesListWidget, SIGNAL(itemChanged(QListWidgetItem*)), this, SLOT(updatePackageDeps(QListWidgetItem*)), Qt::DirectConnection);
+    connect(packagesListWidget, SIGNAL(itemChanged(QListWidgetItem*)), this, SLOT(updatePackageDeps(QListWidgetItem*)), Qt::DirectConnection);
     connect(reposListWidget, SIGNAL(currentRowChanged(int)), this, SLOT(updatePackageList(int)));
     connect(reposListWidget, SIGNAL(itemChanged(QListWidgetItem*)), this, SLOT(updatePackageList(QListWidgetItem*)));
 
+    connect(selectNonePushButton, SIGNAL(clicked()), this, SLOT(unsetAllSelection()));
+    connect(selectAllPushButton, SIGNAL(clicked()), this, SLOT(setAllSelection()));
+
 }
 
+int packagesPage::unsetAllSelection()
+{
+    for ( int i =0; i < reposListWidget->count(); i++)
+    {
+        reposListWidget->item(i)->setCheckState(Qt::Unchecked);
+    }
+    return 0;
+}
+
+int packagesPage::setAllSelection()
+{
+    for ( int i =0; i < reposListWidget->count(); i++)
+    {
+        reposListWidget->item(i)->setCheckState(Qt::Checked);
+    }
+    return 0;
+}
 
 const meskPackage packagesPage::getMeskPackage(QString name)
 {
-    cout << "searching : " << name.toStdString() << endl << flush;
     for ( int i =0; i < packages.count(); i++)
     {
         for ( int k =0; k < packages.at(i).second.count(); k++)
@@ -74,7 +96,7 @@ const meskPackage packagesPage::getMeskPackage(QString name)
     return meskPackage();
 }
 
-int packagesPage::updatePackageDeps(QListWidgetItem* package)
+/*int packagesPage::updatePackageDeps(QListWidgetItem* package)
 {
     // retrieve the meskPakcage first and pass it to the appropriate handler
     meskPackage mpackage = getMeskPackage(package->text());
@@ -92,6 +114,28 @@ int packagesPage::updatePackageDeps(QListWidgetItem* package)
     }
     return 0;
 }
+*/
+
+int packagesPage::updatePackageDeps(QListWidgetItem* package)
+{
+    // retrieve the meskPakcage first and pass it to the appropriate handler
+    meskPackage mpackage = getMeskPackage(package->text());
+
+    if (package->checkState()==Qt::Checked)
+    {
+        ////DepsCheckedList.push_back(mpackage);
+        //QFuture<void> future = QtConcurrent::run(this, &packagesPage::solveDepsCheckedList);
+        //solveDepsChecked(mpackage);
+        /////solveDepsCheckedList();
+        solveDepsChecked(mpackage);
+    }
+    else
+    {
+        //QFuture<void> future = QtConcurrent::run(this, &packagesPage::solveDepsUnChecked, mpackage);
+        solveDepsUnChecked(mpackage);
+    }
+    return 0;
+}
 
 int packagesPage::checkDepPackage(QString name)
 {
@@ -101,15 +145,21 @@ int packagesPage::checkDepPackage(QString name)
         {
             if ( (packagesList.at(i)).second.at(k)->text() == name)
             {
+				if ((packagesList.at(i)).second.at(k)->checkState() == Qt::Checked)
+				{
+					return 0;
+				}
+				
                 (packagesList.at(i)).second.at(k)->setCheckState(Qt::Checked);
                 (packagesList.at(i)).second.at(k)->setBackgroundColor(QColor(Qt::darkGray));
-                (packagesList.at(i)).second.at(k)->setFlags((Qt::ItemFlag)((int)(~1)*Qt::ItemIsUserCheckable)|
-                                  Qt::ItemIsEnabled);
-                break;
+                (packagesList.at(i)).second.at(k)->setFlags((Qt::ItemFlag)((int)(~1)*Qt::ItemIsUserCheckable)|Qt::ItemIsEnabled);
+                                  
+                //cerr << "checking package : " << name.toStdString() << endl << flush;
+                return 0;
             }
         }
     }
-    return 0;
+    return 1;
 }
 
 int packagesPage::uncheckDepPackage(QString name)
@@ -120,41 +170,92 @@ int packagesPage::uncheckDepPackage(QString name)
         {
             if ( (packagesList.at(i)).second.at(k)->text() == name)
             {
+				if ((packagesList.at(i)).second.at(k)->checkState() == Qt::Unchecked)
+				{
+					return 0;
+				}
+				
                 (packagesList.at(i)).second.at(k)->setCheckState(Qt::Unchecked);
                 (packagesList.at(i)).second.at(k)->setBackgroundColor(QColor(Qt::white));
-                break;
+                (packagesList.at(i)).second.at(k)->setForeground(Qt::black);
+                (packagesList.at(i)).second.at(k)->setFlags((Qt::ItemFlag)((int)Qt::ItemIsUserCheckable)|Qt::ItemIsEnabled);
+                return 0;
             }
         }
     }
-    return 0;
+    return 1;
 }
 
 
-int packagesPage::solveDepsCheckedList()
+/*int packagesPage::solveDepsCheckedList()
 {
     if (solvingCheckedDeps)
     {
         return 1;
     }
+    
     solvingCheckedDeps=true;
     reposListWidget->setEnabled(false);
+    packagesListWidget->setEnabled(false);
     while( DepsCheckedList.count() != 0)
     {
         solveDepsChecked(DepsCheckedList.at(0));
         DepsCheckedList.erase(DepsCheckedList.begin());
     }
     reposListWidget->setEnabled(true);
+    packagesListWidget->setEnabled(true);
     solvingCheckedDeps=false;
     return 0;
-}
+}*/
+
 
 int packagesPage::solveDepsChecked(const meskPackage package)
 {
-    for ( int i =0; i < package.Depends.size(); i++)
+	checkPackages.clear();
+	solveDepsCheckedGenerateList(package);
+	return 0;
+}
+
+meskPackage* packagesPage::findPackage(QString package)
+{
+    for ( int i =0; i < packages.count(); i++) // loop for each repo
     {
-        pkgDeps[package.Depends.at(i)].push_back(package.Name);
-        checkDepPackage(package.Depends.at(i));
-        solveDepsChecked(getMeskPackage(package.Depends.at(i)));
+        for ( int k =0; k < packages.at(i).second.count(); k++) // loop for each package in the repo
+        {
+            if ( (packages.at(i)).second.at(k).Name == package) // is this package the critialSubDep ??
+            {
+				return &packages[i].second[k];
+			}
+		}
+	}
+	
+	return NULL;
+}
+
+int packagesPage::solveDepsCheckedGenerateList(const meskPackage package)
+{
+	// populate full list and loop and see if a package is required by other checked packages that are not in the list ?
+	//cerr << "checking package : " << package.Name.toStdString() << endl << flush;
+	checkDepPackage(package.Name);
+	checkPackages.push_back(package.Name);
+		
+	// check all depends ons and all their depend ons ..
+    for ( int i =0; i < package.Depends.size(); i++) 
+    {
+        meskPackage* dep = findPackage(package.Depends.at(i));
+
+        if(dep)
+        {
+			if(dep->currentDependencies.indexOf(package.Name) == -1)
+			{
+				dep->currentDependencies.push_back(package.Name);
+			}
+
+			if (checkPackages.indexOf(dep->Name) == -1)
+			{
+				solveDepsCheckedGenerateList(*dep);
+			}
+		}
     }
 
     return 0;
@@ -162,6 +263,89 @@ int packagesPage::solveDepsChecked(const meskPackage package)
 
 int packagesPage::solveDepsUnChecked(const meskPackage package)
 {
+	unCheckPackages.clear();
+	solveDepsUnCheckedGenerateList(package);
+	return 0;
+}
+
+int packagesPage::solveDepsUnCheckedGenerateList(const meskPackage package)
+{
+ 	unCheckPackages.push_back(package.Name);
+ 	uncheckDepPackage(package.Name);
+	//cerr << "2" << endl << flush;
+	// try to uncheck all the required by packages
+	for ( int i =0; i < package.Depends.size(); i++) 
+    {
+        meskPackage* dep = findPackage(package.Depends.at(i));
+        if(dep)
+        {
+			dep->currentDependencies.removeAll(package.Name);
+						
+			if (unCheckPackages.indexOf(dep->Name) == -1 &&
+				dep->currentDependencies.size() == 0)
+			{
+				solveDepsUnCheckedGenerateList(*dep);
+			}
+		}
+    }
+    
+    // remove all parent packages , useful if we enable to edit dependy package in the future
+   	for ( int i =0; i < package.Dependencies.size(); i++) 
+    {
+        meskPackage* dep = findPackage(package.Dependencies.at(i));
+        if(dep)
+        {
+			dep->currentDependencies.removeAll(package.Name);
+						
+			if (unCheckPackages.indexOf(dep->Name) == -1 &&
+				dep->currentDependencies.size() == 0)
+			{
+				solveDepsUnCheckedGenerateList(*dep);
+			}
+		}
+    }
+    return 0;
+    
+    /*
+	meskPackage* pkg = findPackage(package.Depends.at(i));
+	if(!pkg)
+	{
+		return 1;
+		//dep->currentDependencies.push_back(package.Name);
+	}
+		
+
+	for ( int i =0; i < dep->currentDependencies.size(); i++)
+	{
+		meskPackage mpackage = getMeskPackage(package.Dependencies.at(i));
+		if(mpackage.Critical || solveDepsUnChecked(mpackage))
+		{
+			setStatus(tr("Couldn't un-select ") + package.Name + tr(" which is required by ") + mpackage.Name, ERROR);
+			continue;
+		}
+		uncheckDepPackage(package.Name);
+	}
+	
+	return 0;
+	
+	for ( int i =0; i < package.Dependencies.size(); i++)
+	{
+		// if package is selected, then give an error and say that
+		// this package is required by this dependency
+		// otherwise continue and try to uncheck this pakcage and all it's packages...
+		meskPackage mpackage = getMeskPackage(package.Dependencies.at(i));
+		if(mpackage.Critical || solveDepsUnChecked(mpackage))
+		{
+			setStatus(tr("Couldn't un-select ") + package.Name + tr(" which is required by ") + mpackage.Name, ERROR);
+			continue;
+		}
+		
+	}
+	
+	uncheckDepPackage(package.Name);
+	return 0;*/
+	
+	/*
     for ( int i =0; i < package.Depends.size(); i++)
     {
         solveDepsUnChecked(getMeskPackage(package.Depends.at(i)));
@@ -179,17 +363,18 @@ int packagesPage::solveDepsUnChecked(const meskPackage package)
         }
     }
     return 0;
+    */
 }
 
 
 int packagesPage::fixCriticals()
 {
-    for (int l=0; l < criticSubDeps.count() ; l++)
+    for (int l=0; l < criticSubDeps.count() ; l++) // add deps of all criticalSubDeps to criticSubDeps too !
     {
         fixCriticalsDeps(criticSubDeps.at(l));
     }
 
-    for (int l=0; l<criticSubDeps.size(); l++)
+    for (int l=0; l<criticSubDeps.size(); l++) // mark all criticSubDeps as critical
     {
         for ( int i =0; i < packages.count(); i++)
         {
@@ -206,21 +391,32 @@ int packagesPage::fixCriticals()
     return 0;
 }
 
-int packagesPage::fixCriticalsDeps(QString package)
+int packagesPage::fixCriticalsDeps(QString package, QString caller) // added caller to detect cycle depecency 
 {
-    for ( int i =0; i < packages.count(); i++)
+	
+    for ( int i =0; i < packages.count(); i++) // loop for each repo
     {
-        for ( int k =0; k < packages.at(i).second.count(); k++)
+        for ( int k =0; k < packages.at(i).second.count(); k++) // loop for each package in the repo
         {
-            if ( (packages.at(i)).second.at(k).Name == package)
+            if ( (packages.at(i)).second.at(k).Name == package) // is this package the critialSubDep ??
             {
-                for ( int l=0; l < (packages[i]).second[k].Depends.count(); l++)
+                //for ( int l=0; l < (packages[i]).second[k].Depends.count(); l++)
+                for ( int l=0; l < (packages.at(i)).second.at(k).Depends.count(); l++) // loop for all depdencies of this critialSubDep
                 {
-                    if ( criticSubDeps.indexOf((packages[i]).second[k].Depends.at(l)) == -1)
+                    //if ( criticSubDeps.indexOf((packages[i]).second[k].Depends.at(l)) == -1)
+                    if ( criticSubDeps.indexOf((packages.at(i)).second.at(k).Depends.at(l)) == -1)
                     {
-                        fixCriticalsDeps((packages[i]).second[k].Depends.at(l));
+                        //fixCriticalsDeps((packages[i]).second[k].Depends.at(l));
+                        if ((packages.at(i)).second.at(k).Depends.at(l) == caller)
+						{
+							//setStatus(tr("Detected depency cycle between ") + caller + tr(" and ") + (packages.at(i)).second.at(k).Depends.at(l) , WARNING);
+							setStatus(tr("Detected depency cycle with package ") + caller , WARNING);
+							continue;
+						}
+                        fixCriticalsDeps((packages.at(i)).second.at(k).Depends.at(l), package);
                     }
                 }
+                
                 if ( criticSubDeps.indexOf(package) == -1)
                 {
                     criticSubDeps.push_back(package);
@@ -236,13 +432,14 @@ int packagesPage::fixCriticalsDeps(QString package)
 int packagesPage::initPackages()
 {
     QDir packagesDir;
-    packagesDir.cd(packagesListDirPath);
 
-    if (!packagesDir.exists())
+    if (!packagesDir.cd(packagesListDirPath))
     {
-        emit Status(tr("Ooops , Couldn't find the packages info directory : ")+packagesListDirPath, ERROR);
+		setStatus(tr("Ooops , Couldn't find the packages info directory : ")+packagesListDirPath, ERROR);
         return 1;
     }
+    
+    cerr << packagesListDirPath.toStdString() << endl  << flush;
 
     QString repoName("");
     QVector<meskPackage> repoPackages;
@@ -290,40 +487,48 @@ int packagesPage::initPackagesLists()
     for (int i =0; i < packages.size(); i++)
     {
         //packagesList.clear();
-
         QListWidgetItem* repo = new QListWidgetItem(packages.at(i).first);
 
         QVector<QListWidgetItem*> listPackages;
 
         repo->setData(Qt::CheckStateRole, Qt::Unchecked);
 
+		Qt::ItemFlags itemFlags;
         for (int p=0; p < packages.at(i).second.size(); p++)
         {
-            QListWidgetItem* package = new QListWidgetItem(packages.at(i).second.at(p).Name);
-            package->setFlags((Qt::ItemFlag)((int)(~(packages.at(i).second.at(p).Critical))*Qt::ItemIsUserCheckable)|
-                              Qt::ItemIsEnabled);
+			//cout << packages.at(i).second.at(p).Name.toUtf8().constData() << endl;
+            QListWidgetItem* packagesListItem = new QListWidgetItem(packages.at(i).second.at(p).Name);
+            //package->setFlags((Qt::ItemFlag)((int)(~(packages.at(i).second.at(p).Critical))*Qt::ItemIsUserCheckable)|
+            //                  Qt::ItemIsEnabled|);
             if(packages.at(i).second.at(p).Critical)
             {
+				//itemFlags = 0;
+				itemFlags = Qt::ItemIsEnabled;
+				//DpackagesListItem->setFlags((Qt::ItemFlag)(~Qt::ItemIsUserCheckable|~Qt::ItemIsEditable));
                 if(packages.at(i).second.at(p).Remove)
                 {
-                    package->setData(Qt::CheckStateRole, Qt::Unchecked);
-                    package->setBackgroundColor(QColor(Qt::darkRed));
+                    //packagesListItem->setData(Qt::CheckStateRole, Qt::Unchecked);
+                    packagesListItem->setCheckState(Qt::Unchecked);
+                    packagesListItem->setBackgroundColor(QColor(Qt::darkRed));
                 }
                 else
                 {
-                    package->setData(Qt::CheckStateRole, Qt::Checked);
-                    package->setBackgroundColor(QColor(Qt::darkBlue));
+                    //packagesListItem->setData(Qt::CheckStateRole, Qt::Checked);
+                    packagesListItem->setCheckState(Qt::Checked);
+                    packagesListItem->setBackgroundColor(QColor(Qt::darkBlue));
                 }
-                package->setForeground(QBrush(QColor(Qt::white)));
+                packagesListItem->setForeground(QBrush(QColor(Qt::white)));
+
             }
             else
             {
-                package->setData(Qt::CheckStateRole, Qt::Unchecked);
+				itemFlags = Qt::ItemIsUserCheckable | Qt::ItemIsSelectable | Qt::ItemIsEnabled;
+                //packagesListItem->setData(Qt::CheckStateRole, Qt::Unchecked);
+                packagesListItem->setCheckState(Qt::Unchecked);
             }
-
-            package->setSelected(packages.at(i).second.at(p).Critical);
-            listPackages.push_back(package);
-            //packagesListWidget->addItem(&package);
+            
+            packagesListItem->setFlags(itemFlags);
+            listPackages.push_back(packagesListItem);
         }
         packagesList.push_back(qMakePair(repo, listPackages));
     }
@@ -355,13 +560,13 @@ meskPackage packagesPage::parsePackageFile(const QString& packageFilePath)
 
     if (!packageFile.open(QIODevice::ReadOnly))
     {
-        emit Status(tr("Ooops , Couldn't open package : ")+package.packageFilePath, ERROR);
+		setStatus(tr("Ooops , Couldn't open package : ")+package.packageFilePath, ERROR);
         return package;
     }
 
     package.Name = packageFilePath.mid( packageFilePath.lastIndexOf('/')+1);
 
-    for ( int i =0; i < 5; i++)
+    for ( int i =0; i < 6; i++)
     {
         buffer = (packageFile.readLine()).data();
 
@@ -404,18 +609,57 @@ meskPackage packagesPage::parsePackageFile(const QString& packageFilePath)
         {
             while(buffer.mid(0,3) != "EOR" && !packageFile.atEnd())
             {
-                for (int k=0; k < buffer.split(' ').size(); k++)
+				buffer = buffer.simplified().trimmed();
+                for (int k=0; k < buffer.split(' ',QString::SkipEmptyParts).size(); k++)
                 {
-                    package.Depends.push_back(buffer.split(' ').at(k));
+					QString dep = buffer.split(' ',QString::SkipEmptyParts).at(k).simplified();
+					//cerr << "OOOOOOOOOOPS : "<< dep.remove(QRegExp("[\\n\\t\\r]")).toStdString() << " : " << package.Name.toStdString() << endl << flush;
+					
+					if (dep.toStdString() == " ")
+					{
+						continue;
+					}
+					//cerr << "OOOOOOOOOOPS : "<< dep.toStdString() << " : " << package.Name.toStdString() << endl << flush;
+                    package.Depends.push_back(dep);
                     if (package.Critical != 0)
                     {
-                        pkgDeps[buffer.split(' ').at(k)].push_back(package.Name);
+                        pkgDeps[dep].push_back(package.Name);
 
                         if (package.Critical == 1)
                         {
-                            if ( criticSubDeps.indexOf(buffer.split(' ').at(k)) == -1)
+                            if ( criticSubDeps.indexOf(dep) == -1)
                             {
-                                criticSubDeps.push_back(buffer.split(' ').at(k));
+                                criticSubDeps.push_back(dep);
+                            }
+                        }
+                    }
+                }
+                buffer.clear();
+                buffer = (packageFile.readLine()).data();
+            }
+        }
+        else if (i == 4)
+        {
+            while(buffer.mid(0,3) != "EOK" && !packageFile.atEnd())
+            {
+				buffer = buffer.simplified().trimmed();
+                for (int k=0; k < buffer.split(' ',QString::SkipEmptyParts).size(); k++)
+                {
+					QString dep = buffer.split(' ',QString::SkipEmptyParts).at(k).simplified();
+					if (dep.toStdString() == " ")
+					{
+						continue;
+					}
+                    package.Dependencies.push_back(dep);
+                    if (package.Critical != 0)
+                    {
+                        pkgDeps[dep].push_back(package.Name);
+
+                        if (package.Critical == 1)
+                        {
+                            if ( criticSubDeps.indexOf(dep) == -1)
+                            {
+                                criticSubDeps.push_back(dep);
                             }
                         }
                     }
@@ -428,7 +672,7 @@ meskPackage packagesPage::parsePackageFile(const QString& packageFilePath)
         {
             while(buffer.size() != 0)
             {
-                package.packageFiles.push_back(buffer);
+                package.packageFiles.push_back(buffer.trimmed());
                 buffer.clear();
                 buffer = (packageFile.readLine()).data();
             }
@@ -459,19 +703,21 @@ int packagesPage::resetLists()
     {
         reposListWidget->takeItem(0);
     }
+   
+   emit clearMessages();
 
     packagesListWidget->blockSignals(false);
     reposListWidget->blockSignals(false);
 
     packages.clear();
     packagesList.clear();
+    statuses.clear();
     initAll();
     return 0;
 }
 
 int packagesPage::initAll()
 {
-    pageBase::initAll();
     QFuture<void> future = QtConcurrent::run(this, &packagesPage::initPackageLists);
     return 0;
 }
@@ -479,16 +725,21 @@ int packagesPage::initAll()
 
 int packagesPage::initPackageLists()
 {
-    emit Status(tr("Generating packages info"), BUSY);
-    initPackages();
-    emit Status(tr("Generating packages lists"), BUSY);
-    initPackagesLists();
-    emit Status(tr("Generating packages preview"), BUSY);
-    initListViews();
-    emit Ready();
-    emit Done(true);
+	setStatus(tr("Generating packages info"), BUSY);
+    if (!initPackages())
+	{
+		setStatus(tr("Generating packages lists"), BUSY);
+		initPackagesLists();
+		setStatus(tr("Generating packages preview"), BUSY);
+		initListViews();
+		init = true;
+		emit Ready();
+		setDone(true);
+		return 0;
+	}
+	return 1;
 }
-int packagesPage::updatePackageDescription(QListWidgetItem* newPackage,QListWidgetItem* oldPackage)
+/*int packagesPage::updatePackageDescription(QListWidgetItem* newPackage,QListWidgetItem* oldPackage)
 {
     if (newPackage == NULL)
     {
@@ -496,29 +747,39 @@ int packagesPage::updatePackageDescription(QListWidgetItem* newPackage,QListWidg
     }
 
     return 0;
-}
+}*/
 
 
 int packagesPage::updatePackageDescription(int row)
 {
     if (row < 0)
     {
-        emit Status(tr("Ooops , Wrong package row : ")+QString(row), ERROR);
+		setStatus(tr("Ooops , Wrong package row : ")+QString(row), ERROR);
         return 1;
     }
 
-    packageDescriptionTextEdit->setText(packages.at(reposListWidget->currentRow()).
-                                        second.at(row).
-                                        Description+"\n"
-                                        +packages.at(reposListWidget->currentRow()).
-                                        second.at(row).
-                                        strSize
-                                        +"\n"+QString::number(packages.at(reposListWidget->currentRow()).
-                                        second.at(row).Depends.size()));
+    QString desc =	tr("Description : ")+
+					packages.at(reposListWidget->currentRow()).second.at(row).Description//+"\n"
+					+tr("Size : ")+
+					packages.at(reposListWidget->currentRow()).second.at(row).strSize//+"\n"
+					+tr("Depends on : ")
+					+QString::number(packages.at(reposListWidget->currentRow()).second.at(row).Depends.size())
+					+" "+tr("Packages");
+					
+	if (packages.at(reposListWidget->currentRow()).second.at(row).currentDependencies.size())
+	{
+		QVector<QString> pkgs = packages.at(reposListWidget->currentRow()).second.at(row).currentDependencies;
+		desc += "\n" + tr("Required By : ");
+		for (int i = 0; i < pkgs.size(); i++)
+		{
+			desc += pkgs.at(i) + " ";
+		}
+	}
+	packageDescriptionTextEdit->setText(desc);
     return 0;
 }
 
-int packagesPage::updatePackageList(QListWidgetItem* newRepo,QListWidgetItem* oldRepo)
+/*int packagesPage::updatePackageList(QListWidgetItem* newRepo,QListWidgetItem* oldRepo)
 {
     if (!newRepo || !oldRepo)
     {
@@ -550,7 +811,7 @@ int packagesPage::updatePackageList(QListWidgetItem* newRepo,QListWidgetItem* ol
 
 
     return 0;
-}
+}*/
 
 
 int packagesPage::updatePackageList(QListWidgetItem* item)
@@ -584,6 +845,8 @@ int packagesPage::updatePackageList(QListWidgetItem* item)
             //packagesListWidget->addItem(packagesList[row].second[j]);
         }
     }
+    
+    return 0;
 }
 
 int packagesPage::updatePackageList(int row)
@@ -623,7 +886,7 @@ int packagesPage::updatePackageList(int row)
 
 int packagesPage::addSelectedPackage(meskPackage package)
 {
-    if (! package.Name.size() > 0 )
+    if (!package.Name.size())
     {
         return 1;
     }
@@ -690,7 +953,6 @@ QVector<meskPackage> packagesPage::getSelectedPackages()
         {
             if(packagesList.at(i).second.at(j)->checkState() == Qt::Checked)
             {
-                cout << "adding package : " << packages.at(i).second.at(j).Name.toStdString() << endl;
                 addSelectedPackage(packages.at(i).second.at(j));
             }
         }

@@ -21,6 +21,9 @@ public:
 	explicit configurationPage(QWidget *parent = 0);
 	~configurationPage();
 	int initAll();
+
+public slots:
+    int finishUp();
 	
 private slots:
 	int checkRootPasswordStrength();
@@ -29,9 +32,9 @@ private slots:
 private :
 
 	void changeEvent(QEvent* event);
-	chroot croot;
+	CHRoot croot;
 	diskPage* dpage;
-	QList<Drive> drives;
+    //QList<Drive> drives;
 
 
 	int configSystem();
